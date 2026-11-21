@@ -1,2 +1,3 @@
 AndroidTouchBlock-local.zip
 __pycache__/
+*.apk.idsig

@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
     }
     const int touch_channel=channels++;
     inputs[touch_channel]=(struct pollfd){-1,POLLIN,0};
-    const int sequence[] = {KEY_POWER, KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_VOLUMEUP};
+    const int sequence[] = {KEY_POWER, KEY_VOLUMEUP, KEY_VOLUMEDOWN};
     unsigned step=0;
     int held=0, panel=-1;
     long long started=0, pressed=0, expires=0;
@@ -151,13 +151,16 @@ int main(int argc, char **argv) {
                 if (now-started>5000 || e->code!=sequence[step]) step=0;
                 if (e->code!=sequence[step]) continue;
                 if (!step) started=pressed;
-                if (++step<4) continue;
+                if (++step<sizeof sequence/sizeof sequence[0]) continue;
                 step=0;
                 inputs[touch_channel].fd=open_input(argv[1]);
                 if (inputs[touch_channel].fd<0 || (panel=create_panel(inputs[touch_channel].fd))<0) return 1;
                 expires=now+30000;
                 if (fork()==0) {
-                    execl("/system/bin/input","input","keyevent","KEYCODE_WAKEUP",(char *)NULL);
+                    execl("/system/bin/sh","sh","-c",
+                          "/system/bin/input keyevent KEYCODE_WAKEUP; "
+                          "exec /system/bin/am start --user current "
+                          "-n local.androidtouchblock.notice/.WindowNotice",(char *)NULL);
                     _exit(1);
                 }
             }

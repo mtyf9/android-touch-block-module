@@ -1,6 +1,6 @@
 id=mi6_disable_physical_touch
 name=Android Touch Block
-version=1.2
-versionCode=3
+version=1.3
+versionCode=4
 author=Local
-description=Physical touch blocked by default. Tap Power, Volume Up, Volume Down, Volume Up within 5 seconds for 30 seconds of touch. Power closes the window.
+description=Physical touch blocked by default. Tap Power, Volume Up, Volume Down within 5 seconds for 30 seconds of touch. Power closes the window.

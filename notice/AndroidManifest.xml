@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="local.androidtouchblock.notice" android:versionCode="2" android:versionName="2">
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="33"/>
+    <application android:label="Android Touch Block" android:allowBackup="false">
+        <activity android:name=".WindowNotice" android:exported="false"
+            android:showWhenLocked="true" android:excludeFromRecents="true"
+            android:noHistory="true" android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
+    </application>
+</manifest>

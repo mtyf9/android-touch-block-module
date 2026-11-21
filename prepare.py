@@ -66,7 +66,8 @@ if not any(node.get("name") == names[0] for node in tree.findall("device")):
 with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
     package = Path(tmp)/"AndroidTouchBlock-local.zip"
     with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as z:
-        for file in ["service.sh", "module.prop", "touch-window", "customize.sh"]:
+        for file in ["service.sh", "module.prop", "touch-window", "customize.sh",
+                     "system/app/TouchWindowNotice/TouchWindowNotice.apk"]:
             z.write(ROOT/file, file)
         z.writestr("inputs.conf", "\n".join(names) + "\n")
         z.writestr("system/etc/excluded-input-devices.xml", ET.tostring(tree, encoding="utf-8", xml_declaration=True))
