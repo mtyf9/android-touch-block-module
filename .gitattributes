@@ -1,0 +1,4 @@
+touch-window binary
+*.sh text eol=lf
+*.prop text eol=lf
+*.xml text eol=lf
