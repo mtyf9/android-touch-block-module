@@ -25,7 +25,7 @@ static int open_input(const char *name) {
     while ((entry = readdir(dir))) {
         if (strncmp(entry->d_name, "event", 5)) continue;
         fd = openat(dirfd(dir), entry->d_name, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        char id[128] = {0};
+        char id[256] = {0};
         if (fd >= 0 && ioctl(fd, EVIOCGNAME(sizeof id), id) >= 0 && !strcmp(id,name)) break;
         if (fd >= 0) close(fd);
         fd = -1;
@@ -34,9 +34,34 @@ static int open_input(const char *name) {
     return fd;
 }
 
-static const int axes[] = { ABS_X, ABS_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID,
-    ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TOUCH_MAJOR, ABS_MT_TOUCH_MINOR };
+static bool has_bit(int fd, unsigned long request, unsigned bit) {
+    unsigned char bits[(KEY_MAX+8)/8] = {0};
+    return ioctl(fd,request,bits)>=0 && (bits[bit/8] & (1U << (bit%8)));
+}
+#define HAS(fd,type,bit) has_bit(fd, EVIOCGBIT(type,(KEY_MAX+8)/8),bit)
 
+static int probe(void) {
+    DIR *dir=opendir("/dev/input");
+    if (!dir) return 1;
+    struct dirent *entry;
+    while ((entry=readdir(dir))) {
+        if (strncmp(entry->d_name,"event",5)) continue;
+        int fd=openat(dirfd(dir),entry->d_name,O_RDONLY|O_NONBLOCK|O_CLOEXEC);
+        if (fd<0) continue;
+        char name[256]={0}, phys[256]={0};
+        bool named=ioctl(fd,EVIOCGNAME(sizeof name),name)>0;
+        ioctl(fd,EVIOCGPHYS(sizeof phys),phys);
+        bool touch=has_bit(fd,EVIOCGPROP((KEY_MAX+8)/8),INPUT_PROP_DIRECT)
+            && HAS(fd,EV_ABS,ABS_MT_SLOT) && HAS(fd,EV_ABS,ABS_MT_TRACKING_ID)
+            && HAS(fd,EV_ABS,ABS_MT_POSITION_X) && HAS(fd,EV_ABS,ABS_MT_POSITION_Y);
+        if (named && !strpbrk(name,"\t\r\n") && !strpbrk(phys,"\t\r\n"))
+            printf("%s\t%s\t%s\t%d\t%d\t%d\t%d\n",entry->d_name,name,phys,touch,
+                   HAS(fd,EV_KEY,KEY_POWER)!=0,HAS(fd,EV_KEY,KEY_VOLUMEUP)!=0,HAS(fd,EV_KEY,KEY_VOLUMEDOWN)!=0);
+        close(fd);
+    }
+    closedir(dir);
+    return 0;
+}
 static int create_panel(int source) {
     int fd = open("/dev/uinput", O_WRONLY | O_CLOEXEC);
     if (fd < 0) return -1;
@@ -46,8 +71,8 @@ static int create_panel(int source) {
     if (ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT) < 0 ||
         ioctl(fd, UI_SET_EVBIT, EV_ABS) < 0 || ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0 ||
         ioctl(fd, UI_SET_KEYBIT, BTN_TOUCH) < 0 || ioctl(fd, UI_SET_KEYBIT, BTN_TOOL_FINGER) < 0) goto fail;
-    for (size_t i=0; i<sizeof axes/sizeof axes[0]; ++i) {
-        int axis = axes[i];
+    for (int axis=0; axis<=ABS_MAX; ++axis) {
+        if (!HAS(source,EV_ABS,axis)) continue;
         struct input_absinfo a;
         if (ioctl(source, EVIOCGABS(axis), &a) < 0 || ioctl(fd, UI_SET_ABSBIT, axis) < 0) goto fail;
         d.absmin[axis]=a.minimum; d.absmax[axis]=a.maximum;
@@ -59,11 +84,24 @@ fail:
     return -1;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--probe")) return probe();
+    if (argc!=5) return 2; // panel, power, volume up, volume down
     signal(SIGCHLD, SIG_IGN);
-    struct pollfd inputs[] = {{open_input("qpnp_pon"),POLLIN,0},
-                              {open_input("gpio-keys"),POLLIN,0},{-1,POLLIN,0}};
-    if (inputs[0].fd < 0 || inputs[1].fd < 0) return 1;
+    const int keys[]={KEY_POWER,KEY_VOLUMEUP,KEY_VOLUMEDOWN};
+    struct pollfd inputs[4]={{0}};
+    int key_channel[3], channels=0;
+    for (int i=0; i<3; ++i) {
+        int j=0;
+        while (j<i && strcmp(argv[i+2],argv[j+2])) ++j;
+        if (j<i) { key_channel[i]=key_channel[j]; continue; }
+        int fd=open_input(argv[i+2]);
+        if (fd<0) return 1;
+        key_channel[i]=channels;
+        inputs[channels++]=(struct pollfd){fd,POLLIN,0};
+    }
+    const int touch_channel=channels++;
+    inputs[touch_channel]=(struct pollfd){-1,POLLIN,0};
     const int sequence[] = {KEY_POWER, KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_VOLUMEUP};
     unsigned step=0;
     int held=0, panel=-1;
@@ -71,12 +109,12 @@ int main(void) {
     for (;;) {
         long long now=milliseconds();
         if (panel>=0 && now>=expires) {
-            close(panel); close(inputs[2].fd);
-            panel=inputs[2].fd=-1;
+            close(panel); close(inputs[touch_channel].fd);
+            panel=inputs[touch_channel].fd=-1;
         }
-        int ready=poll(inputs,3,panel<0 ? -1 : (int)(expires-now));
+        int ready=poll(inputs,channels,panel<0 ? -1 : (int)(expires-now));
         if (ready<0) return 1;
-        for (int channel=0; channel<3; ++channel) {
+        for (int channel=0; channel<channels; ++channel) {
             if (inputs[channel].fd<0 || !inputs[channel].revents) continue;
             if (inputs[channel].revents != POLLIN) return 1;
             struct input_event events[32];
@@ -85,7 +123,7 @@ int main(void) {
             for (size_t i=0; i<(size_t)n/sizeof events[0]; ++i) {
                 struct input_event *e=&events[i];
                 now=milliseconds();
-                if (channel==2) {
+                if (channel==touch_channel) {
                     if (now>=expires) break;
                     if (e->type==EV_SYN && e->code==SYN_DROPPED) return 1;
                     if (e->type==EV_ABS || e->type==EV_SYN ||
@@ -94,8 +132,10 @@ int main(void) {
                     }
                     continue;
                 }
-                if (e->type!=EV_KEY || (channel==0 && e->code!=KEY_POWER && e->code!=KEY_VOLUMEDOWN) ||
-                    (channel==1 && e->code!=KEY_VOLUMEUP)) continue;
+                bool matched=false;
+                for (int k=0;k<3;++k)
+                    if (channel==key_channel[k] && e->code==keys[k]) matched=true;
+                if (e->type!=EV_KEY || !matched) continue;
                 if (panel>=0) {
                     if (e->code==KEY_POWER && e->value==1) expires=now;
                     continue;
@@ -113,8 +153,8 @@ int main(void) {
                 if (!step) started=pressed;
                 if (++step<4) continue;
                 step=0;
-                inputs[2].fd=open_input("synaptics_dsx");
-                if (inputs[2].fd<0 || (panel=create_panel(inputs[2].fd))<0) return 1;
+                inputs[touch_channel].fd=open_input(argv[1]);
+                if (inputs[touch_channel].fd<0 || (panel=create_panel(inputs[touch_channel].fd))<0) return 1;
                 expires=now+30000;
                 if (fork()==0) {
                     execl("/system/bin/input","input","keyevent","KEYCODE_WAKEUP",(char *)NULL);
